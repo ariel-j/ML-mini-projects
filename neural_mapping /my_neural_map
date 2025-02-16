@@ -1,0 +1,135 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.datasets import make_blobs
+import torch
+import torch.nn as nn
+from tqdm import tqdm
+
+class SelfOrganizingMap:
+    def __init__(self, input_dim, map_size=(10, 10), learning_rate=0.1, sigma=1.0):
+        self.map_size = map_size
+        self.input_dim = input_dim
+        self.initial_learning_rate = learning_rate
+        self.initial_sigma = sigma
+        
+        # Initialize the weight matrix (map_height × map_width × input_dim)
+        self.weights = np.random.random((map_size[0], map_size[1], input_dim))
+        
+        # Create a grid of 2D coordinates for the neurons
+        self.coordinate_grid = np.array([(i, j) 
+            for i in range(map_size[0]) 
+            for j in range(map_size[1])])
+
+    def find_bmu(self, input_vector):
+        """Find the Best Matching Unit (BMU) for an input vector"""
+        distances = np.sum((self.weights - input_vector) ** 2, axis=2)
+        bmu_index = np.unravel_index(np.argmin(distances), self.map_size)
+        return bmu_index
+
+    def decay_function(self, initial_value, iteration, max_iter):
+        """Decay function for learning rate and sigma"""
+        return initial_value * np.exp(-iteration / max_iter)
+
+    def neighborhood_function(self, bmu_loc, neuron_loc, sigma):
+        """Calculate neighborhood function based on distance from BMU"""
+        distance = np.sum((bmu_loc - neuron_loc) ** 2)
+        return np.exp(-distance / (2 * sigma ** 2))
+
+    def train(self, data, epochs=100):
+        """Train the Self-Organizing Map"""
+        max_iter = epochs * len(data)
+        iteration = 0
+        
+        for epoch in tqdm(range(epochs), desc="Training SOM"):
+            for input_vector in data:
+                # Calculate current learning rate and sigma
+                learning_rate = self.decay_function(
+                    self.initial_learning_rate, iteration, max_iter)
+                sigma = self.decay_function(self.initial_sigma, iteration, max_iter)
+                
+                # Find the Best Matching Unit (BMU)
+                bmu_loc = np.array(self.find_bmu(input_vector))
+                
+                # Update weights for all neurons
+                for x in range(self.map_size[0]):
+                    for y in range(self.map_size[1]):
+                        neuron_loc = np.array([x, y])
+                        influence = self.neighborhood_function(
+                            bmu_loc, neuron_loc, sigma)
+                        self.weights[x, y] += learning_rate * influence * \
+                            (input_vector - self.weights[x, y])
+                
+                iteration += 1
+
+    def get_u_matrix(self):
+        """Calculate the U-Matrix (unified distance matrix)"""
+        u_matrix = np.zeros(self.map_size)
+        
+        for x in range(self.map_size[0]):
+            for y in range(self.map_size[1]):
+                # Calculate average distance to neighbors
+                neighbors = []
+                for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < self.map_size[0] and 0 <= ny < self.map_size[1]:
+                        distance = np.linalg.norm(
+                            self.weights[x,y] - self.weights[nx,ny])
+                        neighbors.append(distance)
+                u_matrix[x,y] = np.mean(neighbors) if neighbors else 0
+                
+        return u_matrix
+
+# Generate sample data
+n_samples = 1000
+X, _ = make_blobs(n_samples=n_samples, centers=4, n_features=2, random_state=42)
+
+# Normalize the data
+scaler = MinMaxScaler()
+X_normalized = scaler.fit_transform(X)
+
+# Create and train SOM
+som = SelfOrganizingMap(input_dim=2, map_size=(20, 20))
+som.train(X_normalized, epochs=50)
+
+# Visualize the results
+plt.figure(figsize=(15, 5))
+
+# Plot 1: Original Data
+plt.subplot(131)
+plt.scatter(X[:, 0], X[:, 1], alpha=0.5)
+plt.title("Original Data")
+
+# Plot 2: U-Matrix
+plt.subplot(132)
+u_matrix = som.get_u_matrix()
+plt.imshow(u_matrix, cmap='viridis')
+plt.colorbar()
+plt.title("U-Matrix")
+
+# Plot 3: Neuron Positions with Connections
+plt.subplot(133)
+for x in range(som.map_size[0]):
+    for y in range(som.map_size[1]):
+        plt.scatter(som.weights[x, y, 0], som.weights[x, y, 1], c='r', s=50)
+        # Draw connections
+        if x < som.map_size[0]-1:
+            plt.plot([som.weights[x, y, 0], som.weights[x+1, y, 0]],
+                    [som.weights[x, y, 1], som.weights[x+1, y, 1]], 'gray', alpha=0.3)
+        if y < som.map_size[1]-1:
+            plt.plot([som.weights[x, y, 0], som.weights[x, y+1, 0]],
+                    [som.weights[x, y, 1], som.weights[x, y+1, 1]], 'gray', alpha=0.3)
+plt.title("SOM Grid")
+
+plt.tight_layout()
+plt.show()
+
+# Additional visualization: Component planes
+plt.figure(figsize=(10, 5))
+for i in range(2):
+    plt.subplot(1, 2, i+1)
+    plt.imshow(som.weights[:, :, i], cmap='coolwarm')
+    plt.colorbar()
+    plt.title(f'Component {i+1}')
+plt.tight_layout()
+plt.show()
